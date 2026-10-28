@@ -36,6 +36,9 @@ from vllm.logger import logger
 from vllm_ascend.ascend_config import AscendCompilationConfig, get_ascend_config
 from vllm_ascend.utils import COMPILATION_PASS_KEY
 
+# GLM-5.3-Flash text backbone, its text-only config and the MTP draft model.
+GLM5_NEXT_MODEL_TYPES = ("glm5_next", "glm5_next_text", "glm5_next_mtp")
+
 
 def compile_fx(graph: GraphModule, example_inputs: list, inner_compile: Callable, decompositions: dict) -> Callable:
     recursive_compile_fx = functools.partial(compile_fx, inner_compile=inner_compile, decompositions=decompositions)
@@ -117,6 +120,14 @@ def _initialize_static_kernel_runtime(vllm_config: VllmConfig) -> None:
         "TransposeQuantBatchMatMul",  # dsv4 950
         "QuantLightningIndexer",  # glm5.2 950
     ]
+    if vllm_config.model_config.hf_text_config.model_type in GLM5_NEXT_MODEL_TYPES:
+        # Start from an empty list so other models' workarounds never silently
+        # exclude GLM's operators, then add GLM's own.
+        # PoolKeyIndexer declares its three metadata inputs as value-dependent
+        # while its tiling never reads them, so static compilation would have to
+        # resolve metadata that changes per request. Fall back to its dynamic
+        # binary until the declaration is corrected.
+        incompatible_ops = ["PoolKeyIndexer"]  # glm5.3-flash
     logger.info_once(
         "Skipping static kernel compilation for incompatible ops: %s.",
         ",".join(incompatible_ops),
